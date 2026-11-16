@@ -1,0 +1,98 @@
+name: CI
+on:
+  push:
+    branches: [main]
+    paths: ["src/**", "tests/**", "requirements.txt", "pyproject.toml", ".github/workflows/**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      study:
+        description: "Validation only, corrected 34-run study, or full 84-run matrix"
+        type: choice
+        options: [corrected, tests, full]
+        default: tests
+permissions:
+  contents: read
+concurrency:
+  group: benchmark-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install --no-deps -e .
+      - name: Check dependencies and build distribution
+        run: |
+          python -m pip check
+          python -m pip wheel --no-deps --wheel-dir dist .
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          with ZipFile(next(Path("dist").glob("*.whl"))) as wheel:
+              names = wheel.namelist()
+              assert any(n.endswith(".dist-info/licenses/LICENSE") for n in names)
+              metadata = wheel.read(next(n for n in names if n.endswith(".dist-info/METADATA"))).decode()
+              assert "\nLicense-Expression: MIT\n" in metadata
+          print("Wheel includes MIT license and package metadata.")
+          PY
+      - run: python -m pytest -q
+      - name: Benchmark integration smoke
+        run: hvac-benchmark --suite smoke --output results/benchmark-smoke --time-limit 1
+      - name: Corrected study integration smoke
+        run: hvac-benchmark sensitivity --stage smoke --output results/study-smoke --no-plots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-results
+          path: |
+            results/
+            dist/
+          if-no-files-found: ignore
+  corrected:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && inputs.study == 'corrected'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install --no-deps -e .
+      - name: Run predeclared hard-constraint study
+        run: hvac-benchmark sensitivity --stage all --output reports/corrected-run
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: corrected-results
+          path: reports/corrected-run/
+          if-no-files-found: ignore
+  full:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && inputs.study == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install --no-deps -e .
+      - run: hvac-benchmark --suite full --output results --time-limit 2
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-results
+          path: results/
+          if-no-files-found: ignore
