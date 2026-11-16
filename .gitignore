@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+results/
+build/
+dist/
+
+# Generated study outputs; dated evidence archives remain tracked.
+reports/hard-constraints/
+reports/corrected-run/
